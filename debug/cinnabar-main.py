@@ -1,49 +1,47 @@
 # Support libs
+import copy
 import os
 import random
 import time
 
-import numpy
+# Name of the folder in which look for tabular (CSV) datasets
+
+# Works only with anomaly detection (no multi-class)
+# ------- GLOBAL VARS -----------
+import numpy as numpy
 import pandas
-import sklearn.metrics as metrics
-import sklearn.model_selection as ms
-# Used to save a classifier and measure its size in KB
-from joblib import dump
+from confens.classifiers.ConfidenceBoosting import ConfidenceBoosting
 from logitboost import LogitBoost
-from pyod.models.cblof import CBLOF
-from pyod.models.hbos import HBOS
-from pyod.models.iforest import IForest
-from pyod.models.inne import INNE
-from pyod.models.pca import PCA
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-# Scikit-Learn algorithms
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import GaussianNB
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.tree import DecisionTreeClassifier
+from xgboost import XGBClassifier
 
-# Name of the folder in which look for tabular (CSV) datasets
-from src.classifiers.Classifier import XGB, UnsupervisedClassifier
-from src.classifiers.ConfidenceBagging import ConfidenceBagging
-from src.classifiers.ConfidenceBoosting import ConfidenceBoosting
-# The PYOD library contains implementations of unsupervised classifiers.
-# Works only with anomaly detection (no multi-class)
-# ------- GLOBAL VARS -----------
-from src.metrics.EnsembleMetric import DisagreementMetric, SharedFaultMetric
+from cinnabar.prediction_rejection.PredictionRejection import SufficientlySafe, ValueAware, compute_value, \
+    EntropyRejection, EnsembleRejection
+from cinnabar.utils.dataset_utils import read_tabular_dataset, read_binary_tabular_dataset
+from cinnabar.utils.general_utils import get_classifier_name, current_ms, compute_rejection_metrics, compute_clf_metrics
 
-CSV_FOLDER = "input_folder/all"
+CSV_FOLDER = "input_folder"
 # Name of the column that contains the label in the tabular (CSV) dataset
 LABEL_NAME = 'multilabel'
 # Name of the 'normal' class in datasets. This will be used only for binary classification (anomaly detection)
 NORMAL_TAG = 'normal'
 # Name of the file in which outputs of the analysis will be saved
-SCORES_FILE = "test_scores_unknowns.csv"
-# Percantage of test data wrt train data
-TT_SPLIT = 0.5
+SCORES_FILE = "cinnabar_results.csv"
+# Percentage of test data wrt train data
+TVT_SPLIT = [0.5, 0.2, 0.3]
 # True if debug information needs to be shown
 VERBOSE = True
+# True if you want to force binary classification
+FORCE_BINARY = True
+# Cost of rejections
+REJECT_COST = -1
 
 # Set random seed for reproducibility
 random.seed(42)
@@ -51,245 +49,205 @@ numpy.random.seed(42)
 
 
 # --------- SUPPORT FUNCTIONS ---------------
-
-
-def current_milli_time():
-    """
-    gets the current time in ms
-    :return: a long int
-    """
-    return round(time.time() * 1000)
-
-
-def get_learners(cont_perc):
+def get_learners(cont_perc) -> list:
     """
     Function to get a learner to use, given its string tag
     :param cont_perc: percentage of anomalies in the training set, required for unsupervised classifiers from PYOD
     :return: the list of classifiers to be trained
     """
     base_learners = [
-        XGB(n_estimators=30),
+        XGBClassifier(n_estimators=100),
+        LinearDiscriminantAnalysis(),
         DecisionTreeClassifier(),
         Pipeline([("norm", MinMaxScaler()), ("gnb", GaussianNB())]),
-        RandomForestClassifier(n_estimators=30),
-        LinearDiscriminantAnalysis(),
+        RandomForestClassifier(n_estimators=100),
         LogisticRegression(),
-        ExtraTreesClassifier(n_estimators=30),
-        LogitBoost(n_estimators=30)
+        ExtraTreesClassifier(n_estimators=100),
+        ConfidenceBoosting(clf=DecisionTreeClassifier()),
     ]
 
-    # If binary classification, we can use unsupervised classifiers also
-    cont_alg = cont_perc if cont_perc < 0.5 else 0.5
-    base_learners.extend([
-        UnsupervisedClassifier(PCA(contamination=cont_alg)),
-        UnsupervisedClassifier(INNE(contamination=cont_alg, n_estimators=10)),
-        UnsupervisedClassifier(IForest(contamination=cont_alg, n_estimators=10)),
-        UnsupervisedClassifier(HBOS(contamination=cont_alg, n_bins=30)),
-        UnsupervisedClassifier(CBLOF(contamination=cont_alg, alpha=0.75, beta=3, n_jobs=-1)),
-    ])
+    return base_learners
 
-    learners = []
-    for clf in base_learners:
-        learners.append(clf)
-        for n_base in [10]:
-            for s_ratio in [0.2, 0.5]:
-                learners.append(ConfidenceBagging(clf=clf, n_base=n_base, sampling_ratio=s_ratio,
-                                                  max_features=0.7, weighted=True))
-                for n_decisors in [int(n_base / 2)]:
-                    learners.append(ConfidenceBagging(clf=clf, n_base=n_base, n_decisors=n_decisors,
-                                                      sampling_ratio=s_ratio, max_features=0.7))
-            for conf_thr in [0.9, 0.8]:
-                for s_ratio in [0.1, 0.3, 0.5]:
-                    for w in [False, True]:
-                        learners.append(ConfidenceBoosting(clf=clf, n_base=n_base, learning_rate=2,
-                                                           sampling_ratio=s_ratio,
-                                                           conf_thr=conf_thr, weighted=w))
 
-    return learners
+def get_calibrators(classifier) -> list:
+    """
+    Returns the functions used for post-hoc calibration. If none, just return [None]
+    :return:
+    """
+    return [CalibratedClassifierCV(classifier, cv='prefit', method='sigmoid'),
+            CalibratedClassifierCV(classifier, cv='prefit', method='isotonic'),
+            None]
+
+
+def get_cost_matrixes() -> list:
+    """
+    Returns the list of cost matrixes to be used in the experiments
+    :return:
+    """
+    cost_matrixes = []
+    if FORCE_BINARY:
+        # items are list of 4 items: [TP, FP, FN, TN]
+        cost_matrixes.append([10, -5, -1000, 1])
+    else:
+        # items are list of 2 items: [correct class, misclassification]
+        cost_matrixes.append([1, -100])
+    return cost_matrixes
+
+
+def get_rejection_strategies(cost_matrix) -> list:
+    """
+    returns the list of prediction rejection strategies to be used in experiments
+    :param cost_matrix: the cost matrix to be used (if value-aware)
+    :return: a list of objects
+    """
+    value_thresholds = numpy.arange(0.3, 1, 0.01, dtype=float)
+    rej_list = [EntropyRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST),
+                SufficientlySafe(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
+                                 max_iterations=50),
+                ValueAware(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
+                           candidate_thresholds=value_thresholds, normal_tag=NORMAL_TAG)]
+    # Ensemble Rejectors
+    rejectors = [
+        EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='one'),
+        EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='two'),
+        EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='all'),
+        ]
+    # Adds base rejectors
+    for rej in rej_list:
+        rejectors.append(rej)
+    return rejectors
 
 
 # ----------------------- MAIN ROUTINE ---------------------
 # This script replicates experiments done for testing the robustness of confidence ensembles
-
 if __name__ == '__main__':
 
+    # This is for checkpointing experiments, otherwise it starts every time from scratch
     existing_exps = None
     if os.path.exists(SCORES_FILE):
-        existing_exps = pandas.read_csv(SCORES_FILE)
-        existing_exps = existing_exps.loc[:, ['dataset_tag', 'unknown', 'clf']]
-    else:
-        with open(SCORES_FILE, 'w') as f:
-            f.write("dataset_tag,unknown,clf,len_test,len_unk,acc,mcc,rec_unk,ok_confs,misc_confs,unk_ok_confs,"
-                    "unk_misc_confs,time,model_size,disagreement,sharedfault\n")
+        existing_exps = pandas.read_csv(SCORES_FILE, usecols=['dataset_tag', 'calibration',
+                                                              'reject_strategy', 'cost_matrix', 'clf_name'])
 
-            # Iterating over CSV files in folder
+    # Iterating over datasets
     for dataset_file in os.listdir(CSV_FOLDER):
-        full_name = os.path.join(CSV_FOLDER, dataset_file)
-        if full_name.endswith(".csv"):
+        # if file is a CSV, it is assumed to be a dataset to be processed
+        if dataset_file.endswith(".csv"):
+            dataset_name = dataset_file.replace(".csv", "")
+            # Read dataset
+            if FORCE_BINARY:
+                data_dict = read_binary_tabular_dataset(dataset_name=os.path.join(CSV_FOLDER, dataset_file),
+                                                        label_name=LABEL_NAME,
+                                                        train_size=TVT_SPLIT[0], val_size=TVT_SPLIT[1],
+                                                        shuffle=True, l_encoding=True, normal_tag=NORMAL_TAG)
+            else:
+                data_dict = read_tabular_dataset(dataset_name=os.path.join(CSV_FOLDER, dataset_file),
+                                                 label_name=LABEL_NAME,
+                                                 train_size=TVT_SPLIT[0], val_size=TVT_SPLIT[1],
+                                                 shuffle=True, l_encoding=True)
 
-            # if file is a CSV, it is assumed to be a dataset to be processed
-            df = pandas.read_csv(full_name, sep=",")
-            df = df.sample(frac=1.0)
-            if len(df.index) > 100000:
-                df = df.iloc[:100000, :]
-            if VERBOSE:
-                print("\n------------ DATASET INFO -----------------")
-                print("Data Points in Dataset '%s': %d" % (dataset_file, len(df.index)))
-                print("Features in Dataset: " + str(len(df.columns)))
+            # Loop for training and testing each classifier
+            contamination = 1 - data_dict["normal_perc"] if FORCE_BINARY else None
+            learners = get_learners(contamination)
+            exp_i = 1
+            for uncal_clf in learners:
+                clf_name = get_classifier_name(uncal_clf)
+                # Training the algorithm to get a model
+                start_time = current_ms()
+                uncal_clf.fit(data_dict["x_train"], data_dict["y_train"])
+                train_time = current_ms() - start_time
 
-            # Filling NaN and Handling (Removing) constant features
-            df = df.fillna(0)
-            df = df.loc[:, df.nunique() > 1]
-            if VERBOSE:
-                print("Features in Dataframe after removing constant ones: " + str(len(df.columns)))
+                # Loop over calibration strategies (None means no calibration)
+                calibration_list = get_calibrators(uncal_clf)
+                for calibrated_classifier in calibration_list:
+                    if calibrated_classifier is None:
+                        cs_name = "none"
+                        classifier = copy.deepcopy(uncal_clf)
+                    else:
+                        cs_name = calibrated_classifier.method
+                        classifier = calibrated_classifier
+                        classifier.fit(data_dict["x_train"], data_dict["y_train"])
+                    val_proba = classifier.predict_proba(data_dict["x_val"])
+                    val_pred = classifier.predict(data_dict["x_val"])
+                    test_proba = classifier.predict_proba(data_dict["x_test"])
+                    test_pred = classifier.predict(data_dict["x_test"])
+                    clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"], y_clf=test_pred)
 
-            features_no_cat = df.select_dtypes(exclude=['object']).columns
-            if VERBOSE:
-                print("Features in Dataframe after non-numeric ones (including label): " + str(len(features_no_cat)))
+                    # Loop over cost matrixes
+                    cost_matrix_list = get_cost_matrixes()
+                    for cost_matrix in cost_matrix_list:
+                        cost_mat_name = ";".join([str(x) for x in cost_matrix])
 
-            # Check if dataset has more than 2 classes
-            y = df[LABEL_NAME].to_numpy()
-            classes = numpy.unique(y)
-            if len(classes) > 2:
+                        clf_value = compute_value(test_pred, data_dict["y_test"],
+                                                  cost_matrix, REJECT_COST, None, NORMAL_TAG)
+                        print("'%s': accuracy %.4f, value %.3f" % (clf_name, clf_metrics['acc'], clf_value))
 
-                print("Dataset contains %d Classes" % len(numpy.unique(y)))
+                        # Loop over rejection strategies
+                        rej_strategy_list = get_rejection_strategies(cost_matrix)
+                        for rej_strategy in rej_strategy_list:
+                            reject_name = rej_strategy.get_name()
+                            reject_desc = rej_strategy.describe()
 
-                # Set up train test split excluding categorical values that some algorithms cannot handle
-                # 1-Hot-Encoding or other approaches may be used instead of removing
-                x_no_cat = df.select_dtypes(exclude=['object']).to_numpy()
-                x_tr, x_test, y_tr, y_te = ms.train_test_split(x_no_cat, y, test_size=TT_SPLIT, shuffle=True)
-
-                index = 0
-                tot = (len(classes) - 1) * len(get_learners(0.5))
-                # Iterate over anomalies
-                for anomaly in classes:
-
-                    # Check if class is an anomaly
-                    if anomaly != NORMAL_TAG:
-
-                        print("\n--------- ANALYSIS WITH '%s' AS UNKNOWN -------------" % anomaly)
-                        train_indexes_to_remove = numpy.asarray(numpy.where(y_tr == anomaly)[0])
-                        x_train = numpy.delete(x_tr, train_indexes_to_remove, axis=0)
-                        y_train = numpy.delete(y_tr, train_indexes_to_remove, axis=0)
-                        y_test = y_te
-                        test_indexes_anomaly = numpy.asarray(numpy.where(y_te == anomaly)[0])
-                        x_test_unknowns = x_test[test_indexes_anomaly, :]
-                        y_test_unknowns = [1 for _ in range(0, len(test_indexes_anomaly))]
-
-                        # Binarize (for anomaly detection you need a 2-class problem,
-                        # requires one of the classes to have NORMAL_TAG)
-
-                        y_train = numpy.where(y_train == NORMAL_TAG, 0, 1)
-                        y_test = numpy.where(y_te == NORMAL_TAG, 0, 1)
-                        normal_frame = df.loc[df[LABEL_NAME] == NORMAL_TAG]
-                        normal_perc = len(normal_frame.index) / len(df.index)
-
-                        if VERBOSE:
-                            print('-------------------- CLASSIFIERS -----------------------')
-
-                        # Loop for training and testing each learner specified by LEARNER_TAGS
-                        contamination = 1 - normal_perc if normal_perc is not None else None
-                        learners = get_learners(contamination)
-                        i = 1
-                        for classifier in learners:
-
-                            # Getting classifier Name
-                            clf_name = classifier.classifier_name() if hasattr(classifier,
-                                                                               'classifier_name') else classifier.__class__.__name__
-                            if clf_name == 'Pipeline':
-                                keys = list(classifier.named_steps.keys())
-                                clf_name = str(keys) if len(keys) != 2 else str(keys[1]).upper()
-
-                            if existing_exps is not None and (((existing_exps['dataset_tag'] == full_name) &
-                                                               (existing_exps['unknown'] == anomaly) &
-                                                               (existing_exps['clf'] == clf_name)).any()):
+                            # Check if experiment was already executed
+                            if existing_exps is not None and (((existing_exps['dataset_tag'] == dataset_name) &
+                                                               (existing_exps['clf_name'] == clf_name) &
+                                                               (existing_exps['calibration'] == cs_name) &
+                                                               (existing_exps['cost_matrix'] == cost_mat_name) &
+                                                               (existing_exps[
+                                                                    'reject_strategy'] == reject_name)).any()):
                                 print('%d/%d Skipping classifier %s, already in the results' % (
-                                    i, len(learners), clf_name))
+                                    exp_i, len(learners) * len(cost_matrix_list) * len(rej_strategy_list) * len(
+                                        calibration_list), clf_name))
 
                             else:
+                                # Otherwise we can move ahead
+                                rej_strategy.fit(proba=val_proba, y_pred=val_pred, y_true=data_dict["y_val"],
+                                                 verbose=False)
+                                rej_pred_y = rej_strategy.apply(test_proba=test_proba,
+                                                                test_label=test_pred)
+                                value = compute_value(rej_pred_y, data_dict["y_test"],
+                                                      cost_matrix, REJECT_COST, None, NORMAL_TAG)
+                                rej_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
+                                                                      y_clf=rej_pred_y)
+                                rej_metrics = compute_rejection_metrics(y_true=data_dict["y_test"],
+                                                                        y_wrapper=rej_pred_y,
+                                                                        y_clf=test_pred)
 
-                                # Training the algorithm to get a model
-                                start_time = current_milli_time()
-                                classifier.fit(x_train, y_train)
-
-                                # Quantifying size of the model
-                                dump(classifier, "clf_dump.bin", compress=9)
-                                size = os.stat("clf_dump.bin").st_size
-                                os.remove("clf_dump.bin")
-
-                                # Computing metrics
-                                y_pred = classifier.predict(x_test)
-                                if hasattr(classifier, 'predict_confidence') and callable(
-                                        classifier.predict_confidence):
-                                    y_conf = classifier.predict_confidence(x_test)
-                                else:
-                                    y_proba = classifier.predict_proba(x_test)
-                                    y_conf = numpy.max(y_proba, axis=1)
-                                conf_ok = y_conf[numpy.where(y_pred == y_test)[0]]
-                                conf_ok = [0.5] if len(conf_ok) == 0 else conf_ok
-                                conf_ok_metrics = [numpy.min(conf_ok), numpy.median(conf_ok), numpy.average(conf_ok),
-                                                   numpy.max(conf_ok)]
-                                conf_misc = y_conf[numpy.where(y_pred != y_test)[0]]
-                                conf_misc = [0.5] if len(conf_misc) == 0 else conf_misc
-                                conf_misc_metrics = [numpy.min(conf_misc), numpy.median(conf_misc),
-                                                     numpy.average(conf_misc),
-                                                     numpy.max(conf_misc)]
-                                acc = metrics.accuracy_score(y_test, y_pred)
-                                mcc = abs(metrics.matthews_corrcoef(y_test, y_pred))
-
-                                # Computing metrics for unknowns
-                                y_pred_unk = classifier.predict(x_test_unknowns)
-                                rec_unk = numpy.average(y_test_unknowns == y_pred_unk)
-                                if hasattr(classifier, 'predict_confidence') and callable(
-                                        classifier.predict_confidence):
-                                    y_conf = classifier.predict_confidence(x_test_unknowns)
-                                else:
-                                    y_proba = classifier.predict_proba(x_test_unknowns)
-                                    y_conf = numpy.max(y_proba, axis=1)
-                                conf_ok = y_conf[numpy.where(y_pred_unk == y_test_unknowns)[0]]
-                                conf_ok = [0.5] if len(conf_ok) == 0 else conf_ok
-                                confunk_ok_metrics = [numpy.min(conf_ok), numpy.median(conf_ok), numpy.average(conf_ok),
-                                                      numpy.max(conf_ok)]
-                                conf_misc = y_conf[numpy.where(y_pred_unk != y_test_unknowns)[0]]
-                                conf_misc = [0.5] if len(conf_misc) == 0 else conf_misc
-                                confunk_misc_metrics = [numpy.min(conf_misc), numpy.median(conf_misc),
-                                                        numpy.average(conf_misc),
-                                                        numpy.max(conf_misc)]
-
-                                # Diversity
-                                if hasattr(classifier, "get_diversity"):
-                                    diversity_dict = classifier.get_diversity(x_test, y_test, [DisagreementMetric(),
-                                                                                               SharedFaultMetric()])
-                                else:
-                                    diversity_dict = {}
-
-                                # Prints metrics for binary classification + train time and model size
                                 print(
-                                    '%d/%d %s\t-> ACC: %.3f, MCC: %.3f, REC_UNK: %.3f, Conf Diff: %.3f, ConfUnk Diff: %.3f '
-                                    '- train time: %d ms - model size: %.3f KB' %
-                                    (index, tot, clf_name, acc, mcc, rec_unk,
-                                     (conf_ok_metrics[2] - conf_misc_metrics[2]),
-                                     (confunk_ok_metrics[2] - confunk_misc_metrics[2]),
-                                     current_milli_time() - start_time, size / 1000.0))
+                                    "\twith '%s': \tvalue %.3f, accuracy %.4f, misc %.4f, rejections %.4f, corr. rej. %.3f, misc gain %.3f" %
+                                    (reject_name, value, rej_metrics['alpha_w'], rej_metrics['eps_w'],
+                                     rej_metrics['phi'], rej_metrics['phi_m_ratio'], rej_metrics['eps_gain']))
 
-                                # Updates CSV file form metrics of experiment
+                                # Updates CSV file with metrics of experiment
+                                if not os.path.exists(SCORES_FILE):
+                                    # Prints header
+                                    with open(SCORES_FILE, 'w') as myfile:
+                                        myfile.write("dataset_tag,clf_name,calibration,cost_matrix,reject_strategy,rej_desc,clf_value,")
+                                        for met in clf_metrics:
+                                            myfile.write(str(met) + ",")
+                                        # Prints rej_clf stats
+                                        myfile.write("rej_clf_value,")
+                                        for met in rej_clf_metrics:
+                                            myfile.write(str(met) + ",")
+                                        # Prints rej_clf stats
+                                        for met in rej_metrics:
+                                            myfile.write(str(met) + ",")
+                                        myfile.write("\n")
                                 with open(SCORES_FILE, "a") as myfile:
                                     # Prints result of experiment in CSV file
-                                    myfile.write(full_name + "," + str(anomaly) + "," + clf_name +
-                                                 "," + str(len(y_test)) + ',' + str(len(y_test_unknowns)) + ',' +
-                                                 str(acc) + "," + str(mcc) + "," + str(rec_unk) + "," +
-                                                 ";".join(["{:.4f}".format(met) for met in conf_ok_metrics]) + "," +
-                                                 ";".join(["{:.4f}".format(met) for met in conf_misc_metrics]) + "," +
-                                                 ";".join(["{:.4f}".format(met) for met in confunk_ok_metrics]) + "," +
-                                                 ";".join(
-                                                     ["{:.4f}".format(met) for met in confunk_misc_metrics]) + "," +
-                                                 str(current_milli_time() - start_time) + "," + str(size) + "," +
-                                                 str((diversity_dict['Disagreement'] / len(
-                                                     y_test) if 'Disagreement' in diversity_dict else 0.0)) + "," +
-                                                 str((diversity_dict['SharedFault'] / len(
-                                                     y_test) if 'SharedFault' in diversity_dict else 0.0)) + "\n")
+                                    myfile.write("%s,%s,%s,%s,%s,%s," % (dataset_name, clf_name, cs_name, cost_mat_name, reject_name, reject_desc))
+                                    # Prints clf stats
+                                    myfile.write(str(clf_value) + ",")
+                                    for met in clf_metrics:
+                                        myfile.write(str(clf_metrics[met]) + ",")
+                                    # Prints rej_clf stats
+                                    myfile.write(str(value) + ",")
+                                    for met in rej_clf_metrics:
+                                        myfile.write(str(rej_clf_metrics[met]) + ",")
+                                    # Prints rej_clf stats
+                                    for met in rej_metrics:
+                                        myfile.write(str(rej_metrics[met]) + ",")
+                                    myfile.write("\n")
 
-                            classifier = None
-                            index += 1
-            else:
-                print('Dataset does not have more than 2 classes, no way to simulating unknowns')
+                            exp_i += 1
+
+                classifier = None

@@ -1,44 +1,16 @@
 import copy
 
 import numpy
-import pandas
-import pandas as pd
-import pyod
-import sklearn
-from logitboost import LogitBoost
-from pyod.models.abod import ABOD
 from pyod.models.base import BaseDetector
-from pyod.models.cblof import CBLOF
-from pyod.models.cof import COF
-from pyod.models.copod import COPOD
-from pyod.models.ecod import ECOD
-from pyod.models.hbos import HBOS
-from pyod.models.iforest import IForest
-from pyod.models.inne import INNE
-from pyod.models.knn import KNN
-from pyod.models.loda import LODA
-from pyod.models.lof import LOF
-from pyod.models.mcd import MCD
-from pyod.models.ocsvm import OCSVM
-from pyod.models.pca import PCA
 from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.ensemble import RandomForestClassifier, BaggingClassifier, GradientBoostingClassifier
-from sklearn.naive_bayes import GaussianNB, MultinomialNB
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler, LabelEncoder
-from sklearn.svm import SVC
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import LabelEncoder
 from sklearn.utils import check_X_y
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_is_fitted, check_array
 from xgboost import XGBClassifier
 
-from src.utils.general_utils import current_ms
+
 # ---------------------------------- SUPPORT METHODS ------------------------------------
-from src.metrics.EnsembleMetric import get_default
-
-
 def get_classifier_name(clf):
     if isinstance(clf, Classifier):
         return clf.classifier_name()
@@ -181,42 +153,6 @@ class Classifier(BaseEstimator, ClassifierMixin):
         :return: see scikit-learn
         """
         return {'clf': self.clf}
-
-    def get_diversity(self, X, y, metrics=None):
-        """
-        Returns diversity metrics. Works only with ensembles.
-        :param metrics: name of the metrics to output (list of Metric objects)
-        :param X: test set
-        :param y: labels of the test set
-        :return: diversity metrics
-        """
-        X = check_array(X)
-        predictions = []
-        check_is_fitted(self)
-        if hasattr(self, "estimators_"):
-            # If it is an ensemble and if it is trained
-            for baselearner in self.estimators_:
-                predictions.append(baselearner.predict(X))
-            predictions = numpy.column_stack(predictions)
-        elif self.clf is not None:
-            # If it wraps an ensemble
-            check_is_fitted(self.clf)
-            if hasattr(self.clf, "estimators_"):
-                # If it is an ensemble and if it is trained
-                for baselearner in self.clf.estimators_:
-                    predictions.append(baselearner.predict(X))
-                predictions = numpy.column_stack(predictions)
-        if predictions is not None and len(predictions) > 0:
-            # Compute metrics
-            metric_scores = {}
-            if metrics is None or not isinstance(metrics, list):
-                metrics = get_default()
-            for metric in metrics:
-                metric_scores[metric.get_name()] = metric.compute_diversity(predictions, y)
-            return metric_scores
-        else:
-            # If it is not an ensemble
-            return {}
 
     def set_params(self, **parameters):
         for parameter, value in parameters.items():

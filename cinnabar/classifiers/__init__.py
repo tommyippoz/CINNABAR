@@ -1,1 +1,1 @@
-from . import ConfidenceBagging, ConfidenceBoosting, ConfidenceBaggingParallel
+from . import Classifier
