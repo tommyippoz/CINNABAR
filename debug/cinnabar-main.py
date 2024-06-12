@@ -22,6 +22,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 
+from cinnabar.calibration.CalibrationStrategy import PlattScaling, IsotonicScaling, BBQScaling, HistogramScaling
 from cinnabar.prediction_rejection.PredictionRejection import SufficientlySafe, ValueAware, compute_value, \
     EntropyRejection, EnsembleRejection
 from cinnabar.utils.dataset_utils import read_tabular_dataset, read_binary_tabular_dataset
@@ -69,13 +70,15 @@ def get_learners(cont_perc) -> list:
     return base_learners
 
 
-def get_calibrators(classifier) -> list:
+def get_calibrators(classifier, labels) -> list:
     """
     Returns the functions used for post-hoc calibration. If none, just return [None]
     :return:
     """
-    return [CalibratedClassifierCV(classifier, cv='prefit', method='sigmoid'),
-            CalibratedClassifierCV(classifier, cv='prefit', method='isotonic'),
+    return [PlattScaling(classifier),
+            IsotonicScaling(classifier),
+            HistogramScaling(classifier, n_bins=10, threshold=0.5, labels=labels),
+            BBQScaling(classifier, threshold=0.5, labels=labels),
             None]
 
 
@@ -157,13 +160,13 @@ if __name__ == '__main__':
                 train_time = current_ms() - start_time
 
                 # Loop over calibration strategies (None means no calibration)
-                calibration_list = get_calibrators(uncal_clf)
+                calibration_list = get_calibrators(uncal_clf, data_dict["label_names"])
                 for calibrated_classifier in calibration_list:
                     if calibrated_classifier is None:
                         cs_name = "none"
                         classifier = copy.deepcopy(uncal_clf)
                     else:
-                        cs_name = calibrated_classifier.method
+                        cs_name = calibrated_classifier.get_name()
                         classifier = calibrated_classifier
                         classifier.fit(data_dict["x_train"], data_dict["y_train"])
                     val_proba = classifier.predict_proba(data_dict["x_val"])
@@ -179,7 +182,7 @@ if __name__ == '__main__':
 
                         clf_value = compute_value(test_pred, data_dict["y_test"],
                                                   cost_matrix, REJECT_COST, None, NORMAL_TAG)
-                        print("'%s': accuracy %.4f, value %.3f" % (clf_name, clf_metrics['acc'], clf_value))
+                        print("'%s - %s': accuracy %.4f, value %.3f" % (clf_name, cs_name, clf_metrics['acc'], clf_value))
 
                         # Loop over rejection strategies
                         rej_strategy_list = get_rejection_strategies(cost_matrix)
@@ -200,14 +203,17 @@ if __name__ == '__main__':
 
                             else:
                                 # Otherwise we can move ahead
+                                start_ms = current_ms()
                                 rej_strategy.fit(proba=val_proba, y_pred=val_pred, y_true=data_dict["y_val"],
                                                  verbose=False)
                                 rej_pred_y = rej_strategy.apply(test_proba=test_proba,
                                                                 test_label=test_pred)
+                                rej_time = current_ms() - start_time
                                 value = compute_value(rej_pred_y, data_dict["y_test"],
                                                       cost_matrix, REJECT_COST, None, NORMAL_TAG)
                                 rej_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
                                                                       y_clf=rej_pred_y)
+                                rej_clf_metrics['time'] = rej_time
                                 rej_metrics = compute_rejection_metrics(y_true=data_dict["y_test"],
                                                                         y_wrapper=rej_pred_y,
                                                                         y_clf=test_pred)
