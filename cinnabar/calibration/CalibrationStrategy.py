@@ -3,18 +3,20 @@ from netcal.binning import HistogramBinning, BBQ
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.utils.validation import check_is_fitted, check_array
 
+from cinnabar.classifiers.Classifier import Classifier
 
-class CalibrationStrategy:
+
+class CalibrationStrategy(Classifier):
     """
     Class for building objects able to reject predictions according to specific rules
     """
 
-    def __init__(self, classifier):
+    def __init__(self, clf):
         """
         Constructor
         :param classifier: the uncalibrated classifier
         """
-        self.uncal_classifier = classifier
+        Classifier.__init__(self, clf)
         self.cal_classifier = None
 
     def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray, verbose=True):
@@ -70,19 +72,19 @@ class PlattScaling(CalibrationStrategy):
     Computes calibration using Platt scaling
     """
 
-    def __init__(self, classifier):
+    def __init__(self, clf):
         """
         Constructor
         :param classifier: the uncalibrated classifier
         """
-        CalibrationStrategy.__init__(self, classifier=classifier)
+        CalibrationStrategy.__init__(self, clf=clf)
 
-    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray, verbose=True):
+    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray):
         """
         Makes the prediction calibration strategy ready to be applied.
         :return:
         """
-        self.cal_classifier = CalibratedClassifierCV(self.uncal_classifier, cv='prefit', method='sigmoid')
+        self.cal_classifier = CalibratedClassifierCV(self.clf, cv='prefit', method='sigmoid')
         self.cal_classifier.fit(x_train, y_train)
 
 
@@ -91,19 +93,19 @@ class IsotonicScaling(CalibrationStrategy):
     Computes calibration using Isotonic scaling
     """
 
-    def __init__(self, classifier):
+    def __init__(self, clf):
         """
         Constructor
         :param classifier: the uncalibrated classifier
         """
-        CalibrationStrategy.__init__(self, classifier=classifier)
+        CalibrationStrategy.__init__(self, clf=clf)
 
-    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray, verbose=True):
+    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray):
         """
         Makes the prediction calibration strategy ready to be applied.
         :return:
         """
-        self.cal_classifier = CalibratedClassifierCV(self.uncal_classifier, cv='prefit', method='isotonic')
+        self.cal_classifier = CalibratedClassifierCV(self.clf, cv='prefit', method='isotonic')
         self.cal_classifier.fit(x_train, y_train)
 
 
@@ -113,22 +115,22 @@ class HistogramScaling(CalibrationStrategy):
     Works only for binary classification
     """
 
-    def __init__(self, classifier, n_bins: int = 10, threshold: float = 0.5, labels: list = [0, 1]):
+    def __init__(self, clf, n_bins: int = 10, threshold: float = 0.5, labels: list = [0, 1]):
         """
         Constructor
         :param classifier: the uncalibrated classifier
         """
-        CalibrationStrategy.__init__(self, classifier=classifier)
+        CalibrationStrategy.__init__(self, clf=clf)
         self.n_bins = n_bins
         self.threshold = threshold
         self.labels = labels
 
-    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray, verbose=True):
+    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray):
         """
         Makes the prediction calibration strategy ready to be applied.
         :return:
         """
-        proba = self.uncal_classifier.predict_proba(x_train)
+        proba = self.clf.predict_proba(x_train)
         # In this case the cal_classifier is the HistBin
         self.cal_classifier = HistogramBinning(bins=self.n_bins)
         self.cal_classifier.fit(proba[:, 1], y_train)
@@ -153,7 +155,7 @@ class HistogramScaling(CalibrationStrategy):
         """
         if self.cal_classifier is None:
             return None
-        probas = self.uncal_classifier.predict_proba(x_test)
+        probas = self.clf.predict_proba(x_test)
         hist_p = self.cal_classifier.transform(probas[:, 1])
         hist_probas = numpy.vstack([1-hist_p, hist_p]).T
         return hist_probas
@@ -165,22 +167,22 @@ class BBQScaling(CalibrationStrategy):
     Works only for binary classification
     """
 
-    def __init__(self, classifier, threshold: float = 0.5, labels: list = [0, 1]):
+    def __init__(self, clf, threshold: float = 0.5, labels: list = [0, 1]):
         """
         Constructor
         :param classifier: the uncalibrated classifier
         """
-        CalibrationStrategy.__init__(self, classifier=classifier)
+        CalibrationStrategy.__init__(self, clf=clf)
         self.threshold = threshold
         self.labels = labels
 
-    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray, verbose=True):
+    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray):
         """
         Makes the prediction calibration strategy ready to be applied.
         :return:
         """
-        proba = self.uncal_classifier.predict_proba(x_train)
-        # In this case the cal_classifier is the HistBin
+        proba = self.clf.predict_proba(x_train)
+        # In this case the cal_classifier is the BBQ
         self.cal_classifier = BBQ()
         self.cal_classifier.fit(proba[:, 1], y_train)
 
@@ -204,7 +206,7 @@ class BBQScaling(CalibrationStrategy):
         """
         if self.cal_classifier is None:
             return None
-        probas = self.uncal_classifier.predict_proba(x_test)
+        probas = self.clf.predict_proba(x_test)
         bbq_p = numpy.clip(self.cal_classifier.transform(probas[:, 1]), 0, 1)
         bbq_probas = numpy.vstack([1 - bbq_p, bbq_p]).T
         return bbq_probas

@@ -25,34 +25,6 @@ def get_feature_importance(clf):
         return clf.feature_importances_
 
 
-def auto_bag_rate(n_features):
-    """
-    Method used to automatically devise a rate to include features in bagging
-    :param n_features: number of features in the dataset
-    :return: the rate of features to bag
-    """
-    if n_features < 20:
-        bag_rate = 0.8
-    elif n_features < 50:
-        bag_rate = 0.7
-    elif n_features < 100:
-        bag_rate = 0.6
-    else:
-        bag_rate = 0.5
-    return bag_rate
-
-
-def predict_uns_proba(uns_clf, test_features):
-    proba = uns_clf.predict_proba(test_features)
-    pred = numpy.argmax(proba, axis=1)
-    for i in range(len(pred)):
-        min_p = min(proba[i])
-        max_p = max(proba[i])
-        proba[i][pred[i]] = max_p
-        proba[i][1 - pred[i]] = min_p
-    return proba
-
-
 class Classifier(BaseEstimator, ClassifierMixin):
     """
     Basic Abstract Class for Classifiers.
@@ -133,13 +105,6 @@ class Classifier(BaseEstimator, ClassifierMixin):
             return numpy.sum(numpy.absolute(self.clf.coef_), axis=0)
         return []
 
-    def is_unsupervised(self):
-        """
-        true if the classifier is unsupervised
-        :return: boolean
-        """
-        return hasattr(self, 'classes_') and numpy.array_equal(self.classes_, [0, 1])
-
     def classifier_name(self):
         """
         Returns the name of the classifier (as string)
@@ -153,6 +118,9 @@ class Classifier(BaseEstimator, ClassifierMixin):
         :return: see scikit-learn
         """
         return {'clf': self.clf}
+
+    def __sklearn_clone__(self):
+        return self.clf
 
     def set_params(self, **parameters):
         for parameter, value in parameters.items():

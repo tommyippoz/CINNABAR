@@ -28,12 +28,12 @@ def compute_multi_value(y_pred, y_true, cost_matrix, reject_value: int = 0, reje
     return value
 
 
-def compute_value(y_pred, y_true, cost_matrix, reject_value: int = 0, reject_tag=None, normal_tag=0):
+def compute_value(y, y_pred, cost_matrix, reject_value: int = 0, reject_tag=None, normal_tag=0):
     """
     Function to compute the value of a prediction (with or without rejections)
     :param normal_tag: the tag to understand what the normal class is (used only for binary classification)
     :param y_pred: the prediction of the classifier
-    :param y_true: the ground truth
+    :param y: the ground truth
     :param cost_matrix: the cost matrix
     :param reject_value: the value (cost) assigned to rejects, default is 0
     :param reject_tag: the tag to understand where a reject is
@@ -42,9 +42,9 @@ def compute_value(y_pred, y_true, cost_matrix, reject_value: int = 0, reject_tag
     if cost_matrix is None:
         return numpy.NaN
     if len(cost_matrix) == 4:
-        return compute_binary_value(y_pred, y_true, cost_matrix, reject_value, reject_tag, normal_tag)
+        return compute_binary_value(y_pred, y, cost_matrix, reject_value, reject_tag, normal_tag)
     else:
-        return compute_binary_value(y_pred, y_true, cost_matrix, reject_value, reject_tag)
+        return compute_multi_value(y_pred, y, cost_matrix, reject_value, reject_tag)
 
 
 class PredictionRejection:

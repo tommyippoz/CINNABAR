@@ -16,6 +16,8 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import make_scorer
+from sklearn.model_selection import TunedThresholdClassifierCV
 from sklearn.naive_bayes import GaussianNB
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
@@ -65,6 +67,8 @@ def get_learners(cont_perc) -> list:
         LogisticRegression(),
         ExtraTreesClassifier(n_estimators=100),
         ConfidenceBoosting(clf=DecisionTreeClassifier()),
+        ConfidenceBoosting(clf=RandomForestClassifier(n_estimators=10)),
+        ConfidenceBoosting(clf=LinearDiscriminantAnalysis()),
     ]
 
     return base_learners
@@ -91,6 +95,7 @@ def get_cost_matrixes() -> list:
     if FORCE_BINARY:
         # items are list of 4 items: [TP, FP, FN, TN]
         cost_matrixes.append([10, -5, -1000, 1])
+        cost_matrixes.append([10, -1, -10000, 1])
     else:
         # items are list of 2 items: [correct class, misclassification]
         cost_matrixes.append([1, -100])
@@ -103,7 +108,7 @@ def get_rejection_strategies(cost_matrix) -> list:
     :param cost_matrix: the cost matrix to be used (if value-aware)
     :return: a list of objects
     """
-    value_thresholds = numpy.arange(0.3, 1, 0.01, dtype=float)
+    value_thresholds = numpy.arange(0, 1, 0.01, dtype=float)
     rej_list = [EntropyRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST),
                 SufficientlySafe(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
                                  max_iterations=50),
@@ -114,7 +119,7 @@ def get_rejection_strategies(cost_matrix) -> list:
         EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='one'),
         EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='two'),
         EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='all'),
-        ]
+    ]
     # Adds base rejectors
     for rej in rej_list:
         rejectors.append(rej)
@@ -126,9 +131,9 @@ def get_rejection_strategies(cost_matrix) -> list:
 if __name__ == '__main__':
 
     # This is for checkpointing experiments, otherwise it starts every time from scratch
-    existing_exps = None
+    exp_hist = None
     if os.path.exists(SCORES_FILE):
-        existing_exps = pandas.read_csv(SCORES_FILE, usecols=['dataset_tag', 'calibration',
+        exp_hist = pandas.read_csv(SCORES_FILE, usecols=['dataset_tag', 'calibration',
                                                               'reject_strategy', 'cost_matrix', 'clf_name'])
 
     # Iterating over datasets
@@ -169,9 +174,7 @@ if __name__ == '__main__':
                         cs_name = calibrated_classifier.get_name()
                         classifier = calibrated_classifier
                         classifier.fit(data_dict["x_train"], data_dict["y_train"])
-                    val_proba = classifier.predict_proba(data_dict["x_val"])
-                    val_pred = classifier.predict(data_dict["x_val"])
-                    test_proba = classifier.predict_proba(data_dict["x_test"])
+
                     test_pred = classifier.predict(data_dict["x_test"])
                     clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"], y_clf=test_pred)
 
@@ -179,10 +182,28 @@ if __name__ == '__main__':
                     cost_matrix_list = get_cost_matrixes()
                     for cost_matrix in cost_matrix_list:
                         cost_mat_name = ";".join([str(x) for x in cost_matrix])
-
-                        clf_value = compute_value(test_pred, data_dict["y_test"],
+                        clf_value = compute_value(data_dict["y_test"], test_pred,
                                                   cost_matrix, REJECT_COST, None, NORMAL_TAG)
-                        print("'%s - %s': accuracy %.4f, value %.3f" % (clf_name, cs_name, clf_metrics['acc'], clf_value))
+                        print("'%s - %s': accuracy %.4f, value %.3f" %
+                              (clf_name, cs_name, clf_metrics['acc'], clf_value))
+
+                        # Creating Tuned Classifier
+                        tuned_classifier = TunedThresholdClassifierCV(
+                            estimator=classifier,
+                            scoring=make_scorer(compute_value, cost_matrix=cost_matrix, reject_value=REJECT_COST,
+                                                reject_tag=None, normal_tag=NORMAL_TAG),
+                            store_cv_results=True,
+                        )
+                        tuned_classifier.fit(data_dict["x_train"], data_dict["y_train"])
+                        tune_desc = tuned_classifier.best_threshold_
+                        tuned_val_proba = classifier.predict_proba(data_dict["x_val"])
+                        tuned_val_pred = classifier.predict(data_dict["x_val"])
+                        tuned_test_proba = classifier.predict_proba(data_dict["x_test"])
+                        tuned_test_pred = tuned_classifier.predict(data_dict["x_test"])
+                        tuned_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"], y_clf=tuned_test_pred)
+                        tuned_clf_value = compute_value(data_dict["y_test"], tuned_test_pred,
+                                                        cost_matrix, REJECT_COST, None, NORMAL_TAG)
+                        print("\tTuned: accuracy %.4f, value %.3f" % (tuned_clf_metrics['acc'], tuned_clf_value))
 
                         # Loop over rejection strategies
                         rej_strategy_list = get_rejection_strategies(cost_matrix)
@@ -191,12 +212,11 @@ if __name__ == '__main__':
                             reject_desc = rej_strategy.describe()
 
                             # Check if experiment was already executed
-                            if existing_exps is not None and (((existing_exps['dataset_tag'] == dataset_name) &
-                                                               (existing_exps['clf_name'] == clf_name) &
-                                                               (existing_exps['calibration'] == cs_name) &
-                                                               (existing_exps['cost_matrix'] == cost_mat_name) &
-                                                               (existing_exps[
-                                                                    'reject_strategy'] == reject_name)).any()):
+                            if exp_hist is not None and (((exp_hist['dataset_tag'] == dataset_name) &
+                                                          (exp_hist['clf_name'] == clf_name) &
+                                                          (exp_hist['calibration'] == cs_name) &
+                                                          (exp_hist['cost_matrix'] == cost_mat_name) &
+                                                          (exp_hist['reject_strategy'] == reject_name)).any()):
                                 print('%d/%d Skipping classifier %s, already in the results' % (
                                     exp_i, len(learners) * len(cost_matrix_list) * len(rej_strategy_list) * len(
                                         calibration_list), clf_name))
@@ -204,12 +224,12 @@ if __name__ == '__main__':
                             else:
                                 # Otherwise we can move ahead
                                 start_ms = current_ms()
-                                rej_strategy.fit(proba=val_proba, y_pred=val_pred, y_true=data_dict["y_val"],
+                                rej_strategy.fit(proba=tuned_val_proba, y_pred=tuned_val_pred, y_true=data_dict["y_val"],
                                                  verbose=False)
-                                rej_pred_y = rej_strategy.apply(test_proba=test_proba,
+                                rej_pred_y = rej_strategy.apply(test_proba=tuned_test_proba,
                                                                 test_label=test_pred)
                                 rej_time = current_ms() - start_time
-                                value = compute_value(rej_pred_y, data_dict["y_test"],
+                                value = compute_value(data_dict["y_test"], rej_pred_y,
                                                       cost_matrix, REJECT_COST, None, NORMAL_TAG)
                                 rej_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
                                                                       y_clf=rej_pred_y)
@@ -227,8 +247,13 @@ if __name__ == '__main__':
                                 if not os.path.exists(SCORES_FILE):
                                     # Prints header
                                     with open(SCORES_FILE, 'w') as myfile:
-                                        myfile.write("dataset_tag,clf_name,calibration,cost_matrix,reject_strategy,rej_desc,clf_value,")
+                                        myfile.write(
+                                            "dataset_tag,clf_name,calibration,cost_matrix,tune_desc,reject_strategy,rej_desc,clf_value,")
                                         for met in clf_metrics:
+                                            myfile.write(str(met) + ",")
+                                        # Prints tuned clf stats
+                                        myfile.write("tuned_clf_value,")
+                                        for met in tuned_clf_metrics:
                                             myfile.write(str(met) + ",")
                                         # Prints rej_clf stats
                                         myfile.write("rej_clf_value,")
@@ -240,11 +265,16 @@ if __name__ == '__main__':
                                         myfile.write("\n")
                                 with open(SCORES_FILE, "a") as myfile:
                                     # Prints result of experiment in CSV file
-                                    myfile.write("%s,%s,%s,%s,%s,%s," % (dataset_name, clf_name, cs_name, cost_mat_name, reject_name, reject_desc))
+                                    myfile.write("%s,%s,%s,%s,%s,%s,%s" % (
+                                    dataset_name, clf_name, cs_name, cost_mat_name, tune_desc, reject_name, reject_desc))
                                     # Prints clf stats
                                     myfile.write(str(clf_value) + ",")
                                     for met in clf_metrics:
                                         myfile.write(str(clf_metrics[met]) + ",")
+                                    # Prints tuned_clf stats
+                                    myfile.write(str(tuned_clf_value) + ",")
+                                    for met in tuned_clf_metrics:
+                                        myfile.write(str(tuned_clf_metrics[met]) + ",")
                                     # Prints rej_clf stats
                                     myfile.write(str(value) + ",")
                                     for met in rej_clf_metrics:
