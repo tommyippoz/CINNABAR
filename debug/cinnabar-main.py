@@ -66,9 +66,9 @@ def get_learners(cont_perc) -> list:
         RandomForestClassifier(n_estimators=100),
         LogisticRegression(),
         ExtraTreesClassifier(n_estimators=100),
-        ConfidenceBoosting(clf=DecisionTreeClassifier()),
-        ConfidenceBoosting(clf=RandomForestClassifier(n_estimators=10)),
-        ConfidenceBoosting(clf=LinearDiscriminantAnalysis()),
+        #ConfidenceBoosting(clf=DecisionTreeClassifier()),
+        #ConfidenceBoosting(clf=RandomForestClassifier(n_estimators=10)),
+        #ConfidenceBoosting(clf=LinearDiscriminantAnalysis()),
     ]
 
     return base_learners
@@ -174,7 +174,6 @@ if __name__ == '__main__':
                         cs_name = calibrated_classifier.get_name()
                         classifier = calibrated_classifier
                         classifier.fit(data_dict["x_train"], data_dict["y_train"])
-
                     test_pred = classifier.predict(data_dict["x_test"])
                     clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"], y_clf=test_pred)
 
@@ -265,7 +264,7 @@ if __name__ == '__main__':
                                         myfile.write("\n")
                                 with open(SCORES_FILE, "a") as myfile:
                                     # Prints result of experiment in CSV file
-                                    myfile.write("%s,%s,%s,%s,%s,%s,%s" % (
+                                    myfile.write("%s,%s,%s,%s,%s,%s,%s," % (
                                     dataset_name, clf_name, cs_name, cost_mat_name, tune_desc, reject_name, reject_desc))
                                     # Prints clf stats
                                     myfile.write(str(clf_value) + ",")

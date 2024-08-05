@@ -30,6 +30,7 @@ class Classifier(BaseEstimator, ClassifierMixin):
     Basic Abstract Class for Classifiers.
     Abstract methods are only the classifier_name, with many degrees of freedom in implementing them.
     Wraps implementations from different frameworks (if needed), sklearn and many deep learning utilities
+    Allows compatibility with all sklearn related functions (GridSearchCV, TunedClassifierCV, ...)
     """
 
     def __init__(self, clf):

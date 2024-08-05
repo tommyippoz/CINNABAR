@@ -14,12 +14,12 @@ class CalibrationStrategy(Classifier):
     def __init__(self, clf):
         """
         Constructor
-        :param classifier: the uncalibrated classifier
+        :param clf: the uncalibrated classifier
         """
         Classifier.__init__(self, clf)
         self.cal_classifier = None
 
-    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray, verbose=True):
+    def fit(self, x_train: numpy.ndarray, y_train: numpy.ndarray):
         """
         Makes the prediction calibration strategy ready to be applied.
         :param x_train: the train features
@@ -75,7 +75,7 @@ class PlattScaling(CalibrationStrategy):
     def __init__(self, clf):
         """
         Constructor
-        :param classifier: the uncalibrated classifier
+        :param clf: the uncalibrated classifier
         """
         CalibrationStrategy.__init__(self, clf=clf)
 
@@ -96,7 +96,7 @@ class IsotonicScaling(CalibrationStrategy):
     def __init__(self, clf):
         """
         Constructor
-        :param classifier: the uncalibrated classifier
+        :param clf: the uncalibrated classifier
         """
         CalibrationStrategy.__init__(self, clf=clf)
 
@@ -118,7 +118,7 @@ class HistogramScaling(CalibrationStrategy):
     def __init__(self, clf, n_bins: int = 10, threshold: float = 0.5, labels: list = [0, 1]):
         """
         Constructor
-        :param classifier: the uncalibrated classifier
+        :param clf: the uncalibrated classifier
         """
         CalibrationStrategy.__init__(self, clf=clf)
         self.n_bins = n_bins
@@ -170,7 +170,7 @@ class BBQScaling(CalibrationStrategy):
     def __init__(self, clf, threshold: float = 0.5, labels: list = [0, 1]):
         """
         Constructor
-        :param classifier: the uncalibrated classifier
+        :param clf: the uncalibrated classifier
         """
         CalibrationStrategy.__init__(self, clf=clf)
         self.threshold = threshold

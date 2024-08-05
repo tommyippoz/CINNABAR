@@ -2,6 +2,7 @@ import numpy
 from sklearn.exceptions import NotFittedError
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.utils.validation import check_is_fitted
+from sprout.SPROUTObject import SPROUTObject
 
 
 def compute_binary_value(y_pred, y_true, cost_matrix, reject_value: int = 0, reject_tag=None, normal_tag=0):
@@ -433,3 +434,56 @@ class EnsembleRejection(PredictionRejection):
         :return:
         """
         return self.__class__.__name__ + "(" + str(self.strategy) + ")"
+
+
+class SPROUTRejection(PredictionRejection):
+    """
+    Uses the SPROUT-ML library to reject predictions
+    """
+
+    def __init__(self, cost_matrix, reject_cost: int = 0):
+        """
+        Constructor
+        :param cost_matrix: the cost matrix (may not be used)
+        :param val_proba: the probabilities assigned by a classifier to validation set
+        """
+        PredictionRejection.__init__(self, cost_matrix=cost_matrix, reject_cost=reject_cost)
+        self.sprout = self.build_sprout_object()
+
+    def build_sprout_object(self) -> SPROUTObject:
+        obj = SPROUTObject()
+        return obj
+
+    def fit(self, proba: numpy.ndarray, y_pred: numpy.ndarray, y_true: numpy.ndarray, verbose=True):
+        """
+        Makes the prediction rejection strategy ready to be applied.
+        In this case, it identifies ranges in which predictions should be excluded
+        :return:
+        """
+        x_train = self.get_entropy(proba)
+        y_train = 1*(y_pred != y_true)
+        self.classifier.fit(x_train, y_train)
+
+
+    def is_fit(self) -> bool:
+        """
+        True if already fit
+        :return: boolean
+        """
+        try:
+            if self.classifier is None:
+                return False
+            check_is_fitted(self.classifier)
+            return True
+        except NotFittedError:
+            return False
+
+    def find_rejects(self, test_proba: numpy.ndarray, reject_ranges: list = None):
+        """
+        Findes rejections in a specific test set
+        :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
+        :param test_proba: the data to apply the strategy to
+        :return:
+        """
+        x_test = self.get_entropy(test_proba)
+        return self.classifier.predict(x_test)
