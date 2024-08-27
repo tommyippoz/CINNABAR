@@ -59,9 +59,10 @@ def get_classifier_name(classifier) -> str:
     return clf_name
 
 
-def compute_clf_metrics(y_true, y_clf, avoid_tag=None):
+def compute_clf_metrics(y_true, y_clf, avoid_tag=None, labels=None):
     """
     Computes metrics for a normal classifier
+    :param labels: labels of the problem
     :param avoid_tag: prediction tag to avoid when computing metrics
     :param y_true: the ground truth labels
     :param y_clf: the prediction of the regular classifier
@@ -81,23 +82,14 @@ def compute_clf_metrics(y_true, y_clf, avoid_tag=None):
                     'acc': sklearn.metrics.accuracy_score(true_label, pred_label),
                     'mcc': sklearn.metrics.matthews_corrcoef(true_label, pred_label),
                     'b_acc': sklearn.metrics.balanced_accuracy_score(true_label, pred_label)}
-        if len(numpy.unique(true_label)) == 1:
-            # When the classifier predicts always the same class (shouldnt happen)
-            met_dict['tn'] = sum(pred_label == true_label)
-            met_dict['tp'] = 0
-            met_dict['fn'] = sum(pred_label != true_label)
-            met_dict['fp'] = 0
-            met_dict['rec'] = 1.0
-            met_dict['prec'] = 0.0
-        elif len(numpy.unique(true_label)) == 2:
-            # Metrics for binary classification
-            tn, fp, fn, tp = sklearn.metrics.confusion_matrix(true_label, pred_label).ravel()
-            met_dict['tn'] = tn
-            met_dict['tp'] = tp
-            met_dict['fn'] = fn
-            met_dict['fp'] = fp
-            met_dict['rec'] = sklearn.metrics.recall_score(true_label, pred_label)
-            met_dict['prec'] = sklearn.metrics.precision_score(true_label, pred_label)
+        # Metrics for binary classification
+        tn, fp, fn, tp = sklearn.metrics.confusion_matrix(true_label, pred_label, labels=labels).ravel()
+        met_dict['tn'] = tn
+        met_dict['tp'] = tp
+        met_dict['fn'] = fn
+        met_dict['fp'] = fp
+        met_dict['rec'] = sklearn.metrics.recall_score(true_label, pred_label, labels=labels, zero_division=0)
+        met_dict['prec'] = sklearn.metrics.precision_score(true_label, pred_label, labels=labels, zero_division=0)
     else:
         met_dict = {'avoid': sum(to_avoid),
                     'acc': 0, 'mcc': 0, 'b_acc': 0,

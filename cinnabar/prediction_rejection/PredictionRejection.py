@@ -1,8 +1,17 @@
+from enum import Enum
+
 import numpy
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.exceptions import NotFittedError
+from sklearn.naive_bayes import MultinomialNB, GaussianNB, BernoulliNB, ComplementNB
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.utils.validation import check_is_fitted
 from sprout.SPROUTObject import SPROUTObject
+from sprout.classifiers.Classifier import LogisticReg
+from xgboost import XGBClassifier
 
 
 def compute_binary_value(y_pred, y_true, cost_matrix, reject_value: int = 0, reject_tag=None, normal_tag=0):
@@ -77,9 +86,10 @@ class PredictionRejection:
         """
         return True if self.cost_matrix is not None and len(self.cost_matrix) == 4 else False
 
-    def find_rejects(self, test_proba: numpy.ndarray, reject_ranges: list = None):
+    def find_rejects(self, test_proba: numpy.ndarray, x_test: numpy.ndarray, reject_ranges: list = None):
         """
         Findes rejections in a specific test set
+        :param x_test: test set
         :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
         :param test_proba: the data to apply the strategy to
         :return:
@@ -93,10 +103,11 @@ class PredictionRejection:
         """
         pass
 
-    def apply(self, test_proba: numpy.ndarray, test_label: numpy.ndarray = None, reject_tag=None,
+    def apply(self, test_proba: numpy.ndarray, x_test: numpy.ndarray, test_label: numpy.ndarray = None, reject_tag=None,
               reject_ranges: list = None):
         """
         Applies the prediction rejection strategy to a specific test set
+        :param x_test: test set
         :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
         :param test_label: the predicted labels
         :param reject_tag: the item that corresponds to a prediction rejection
@@ -105,7 +116,7 @@ class PredictionRejection:
         """
         if test_label is None:
             test_label = numpy.argmax(test_proba, axis=1)
-        rejects = self.find_rejects(test_proba, reject_ranges)
+        rejects = self.find_rejects(test_proba, x_test, reject_ranges)
         return numpy.asarray([reject_tag if rejects[i] > 0 else test_label[i] for i in range(len(rejects))])
 
     def get_name(self) -> str:
@@ -163,7 +174,7 @@ class ValueAware(PredictionRejection):
             max_value = -numpy.inf
             for t_fp in self.candidate_thresholds:
                 # here we define K = fn_c_norm, change it based on task.
-                y_rej = self.apply(proba, None, None, [t_fp, 0.5])
+                y_rej = self.apply(proba, None, None, None, [t_fp, 0.5])
                 value = compute_binary_value(y_rej, y_true, self.cost_matrix, self.reject_cost, None, self.normal_tag)
                 if value > max_value:
                     best_fp = t_fp
@@ -173,7 +184,7 @@ class ValueAware(PredictionRejection):
             max_value = -numpy.inf
             for t_fn in self.candidate_thresholds:
                 # here we define K = fn_c_norm, change it based on task.
-                y_rej = self.apply(proba, None, None, [0.5, t_fn])
+                y_rej = self.apply(proba, None, None, None, [0.5, t_fn])
                 value = compute_binary_value(y_rej, y_true, self.cost_matrix, self.reject_cost, None,
                                              self.normal_tag)
                 if value > max_value:
@@ -190,9 +201,10 @@ class ValueAware(PredictionRejection):
         """
         return self.reject_ranges is not None and len(self.reject_ranges) > 0
 
-    def find_rejects(self, test_proba: numpy.ndarray, reject_ranges: list = None):
+    def find_rejects(self, test_proba: numpy.ndarray, x_test: numpy.ndarray, reject_ranges: list = None):
         """
         Findes rejections in a specific test set
+        :param x_test: test set
         :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
         :param test_proba: the data to apply the strategy to
         :return:
@@ -270,7 +282,7 @@ class SufficientlySafe(PredictionRejection):
         :return: a percentage (to be compared with ALR)
         """
         fn_count = sum(1 * fn_list)
-        rejects = self.find_rejects(test_proba, reject_ranges)
+        rejects = self.find_rejects(test_proba, None, reject_ranges)
         rejected_fn = rejects * fn_list
         return (fn_count - sum(rejected_fn)) / len(fn_list)
 
@@ -281,14 +293,15 @@ class SufficientlySafe(PredictionRejection):
         :param reject_ranges: (optional) custom reject ranges, or self.reject_ranges are used instead
         :return: SSPr value
         """
-        rejects = self.find_rejects(test_proba, reject_ranges)
+        rejects = self.find_rejects(test_proba, None, reject_ranges)
         nssp = sum(rejects)
         ssp = len(rejects) - nssp
         return ssp / (nssp + ssp)
 
-    def find_rejects(self, test_proba: numpy.ndarray, reject_ranges: list = None):
+    def find_rejects(self, test_proba: numpy.ndarray, x_test: numpy.ndarray, reject_ranges: list = None):
         """
         Findes rejections in a specific test set
+        :param x_test: test set
         :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
         :param test_proba: the data to apply the strategy to
         :return:
@@ -334,7 +347,7 @@ class EntropyRejection(PredictionRejection):
         :return:
         """
         x_train = self.get_entropy(proba)
-        y_train = 1*(y_pred != y_true)
+        y_train = 1 * (y_pred != y_true)
         self.classifier.fit(x_train, y_train)
 
     def get_entropy(self, proba):
@@ -363,9 +376,10 @@ class EntropyRejection(PredictionRejection):
         except NotFittedError:
             return False
 
-    def find_rejects(self, test_proba: numpy.ndarray, reject_ranges: list = None):
+    def find_rejects(self, test_proba: numpy.ndarray, x_test: numpy.ndarray, reject_ranges: list = None):
         """
         Findes rejections in a specific test set
+        :param x_test: test set
         :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
         :param test_proba: the data to apply the strategy to
         :return:
@@ -407,17 +421,17 @@ class EnsembleRejection(PredictionRejection):
                 return False
         return True
 
-
-    def find_rejects(self, test_proba: numpy.ndarray, reject_ranges: list = None):
+    def find_rejects(self, test_proba: numpy.ndarray, x_test: numpy.ndarray, reject_ranges: list = None):
         """
-        Finds rejections in a specific test set
+        Findes rejections in a specific test set
+        :param x_test: test set
         :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
         :param test_proba: the data to apply the strategy to
         :return:
         """
         rejs = []
         for rejector in self.rejectors:
-            rejs.append(rejector.find_rejects(test_proba, None))
+            rejs.append(rejector.find_rejects(test_proba, None, None))
         rejs = numpy.sum(numpy.vstack(rejs), axis=0)
         if self.strategy == 'one':
             return numpy.where(rejs > 0, 1, 0)
@@ -436,23 +450,66 @@ class EnsembleRejection(PredictionRejection):
         return self.__class__.__name__ + "(" + str(self.strategy) + ")"
 
 
+class SPROUTStrategy(Enum):
+    """
+    Supports creation of SPROUTRejection objects
+    """
+    BASE = 1
+    FULL = 2
+    FAST = 3
+    NEIGHBOUR = 4
+
+
 class SPROUTRejection(PredictionRejection):
     """
     Uses the SPROUT-ML library to reject predictions
     """
 
-    def __init__(self, cost_matrix, reject_cost: int = 0):
+    def __init__(self, cost_matrix, classifier, x_train, y_train, x_val, y_val, label_names,
+                 strategy: SPROUTStrategy = SPROUTStrategy.FAST, reject_cost: int = 0):
         """
         Constructor
         :param cost_matrix: the cost matrix (may not be used)
         :param val_proba: the probabilities assigned by a classifier to validation set
         """
         PredictionRejection.__init__(self, cost_matrix=cost_matrix, reject_cost=reject_cost)
-        self.sprout = self.build_sprout_object()
+        self.classifier = classifier
+        self.x_train = x_train
+        self.y_train = y_train
+        self.x_val = x_val
+        self.y_val = y_val
+        self.strategy = strategy
+        self.label_names = label_names
+        self.sprout = self.build_sprout_object(self.strategy, self.label_names)
 
-    def build_sprout_object(self) -> SPROUTObject:
-        obj = SPROUTObject()
-        return obj
+    def build_sprout_object(self, strategy: SPROUTStrategy = SPROUTStrategy.FAST, label_names: list = None) -> SPROUTObject:
+        sp_obj = SPROUTObject(models_folder="sprout_models")
+        if strategy == SPROUTStrategy.NEIGHBOUR:
+            sp_obj.add_calculator_knn_distance(x_train=self.x_train, k=5)
+        else:
+            sp_obj.add_calculator_maxprob()
+            sp_obj.add_calculator_entropy(n_classes=len(label_names) if label_names is not None else 2)
+            sp_obj.add_calculator_confidence(x_train=self.x_train, y_train=self.y_train, confidence_level=0.9)
+            if strategy != SPROUTStrategy.FAST:
+                sp_obj.add_calculator_external(classifier=Pipeline([("norm", MinMaxScaler()), ("clf", MultinomialNB())]),
+                                               x_train=self.x_train, y_train=self.y_train,
+                                               n_classes=len(label_names) if label_names is not None else 2)
+                sp_obj.add_calculator_combined(classifier=XGBClassifier(n_estimators=30), x_train=self.x_train, y_train=self.y_train,
+                                               n_classes=len(label_names) if label_names is not None else 2)
+                if strategy == SPROUTStrategy.FULL:
+                    for cc in [[Pipeline([("norm", MinMaxScaler()), ("clf", GaussianNB())]),
+                                LinearDiscriminantAnalysis(), LogisticReg()],
+                               [Pipeline([("norm", MinMaxScaler()), ("clf", GaussianNB())]),
+                                Pipeline([("norm", MinMaxScaler()), ("clf", BernoulliNB())]),
+                                Pipeline([("norm", MinMaxScaler()), ("clf", MultinomialNB())]),
+                                Pipeline([("norm", MinMaxScaler()), ("clf", ComplementNB())])],
+                               [DecisionTreeClassifier(), RandomForestClassifier(n_estimators=10),
+                                GradientBoostingClassifier(n_estimators=10)]]:
+                        sp_obj.add_calculator_multicombined(clf_set=cc, x_train=self.x_train, y_train=self.y_train,
+                                                            n_classes=len(label_names) if label_names is not None else 2)
+                    sp_obj.add_calculator_neighbour(x_train=self.x_train, y_train=self.y_train, label_names=label_names)
+                    sp_obj.add_calculator_proximity(x_train=self.x_train, n_iterations=20, range=0.05)
+        return sp_obj
 
     def fit(self, proba: numpy.ndarray, y_pred: numpy.ndarray, y_true: numpy.ndarray, verbose=True):
         """
@@ -460,10 +517,7 @@ class SPROUTRejection(PredictionRejection):
         In this case, it identifies ranges in which predictions should be excluded
         :return:
         """
-        x_train = self.get_entropy(proba)
-        y_train = 1*(y_pred != y_true)
-        self.classifier.fit(x_train, y_train)
-
+        self.sprout.train_model(self.classifier, self.x_train, self.y_train, self.x_val, self.y_val)
 
     def is_fit(self) -> bool:
         """
@@ -478,12 +532,19 @@ class SPROUTRejection(PredictionRejection):
         except NotFittedError:
             return False
 
-    def find_rejects(self, test_proba: numpy.ndarray, reject_ranges: list = None):
+    def find_rejects(self, test_proba: numpy.ndarray, x_test: numpy.ndarray, reject_ranges: list = None):
         """
         Findes rejections in a specific test set
+        :param x_test: test set
         :param reject_ranges: ranges to be used for rejecting: if a proba is in range, is rejected
         :param test_proba: the data to apply the strategy to
         :return:
         """
-        x_test = self.get_entropy(test_proba)
-        return self.classifier.predict(x_test)
+        return self.sprout.predict_misclassifications(x_test, self.classifier, verbose=False)
+
+    def get_name(self) -> str:
+        """
+        Returns the name of the strategy
+        :return:
+        """
+        return self.__class__.__name__ + "(" + str(self.strategy) + ")"

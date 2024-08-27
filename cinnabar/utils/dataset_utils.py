@@ -1,3 +1,4 @@
+import copy
 import os
 import shutil
 import urllib
@@ -185,6 +186,45 @@ def read_binary_tabular_dataset(dataset_name: str, label_name: str, limit: int =
             tab_dict["y_val"] = numpy.where(tab_dict["y_val"] == normal_tag, normal_tag, "anomaly")
         tab_dict["label_names"] = [normal_tag, "anomaly"]
     return tab_dict
+
+
+def read_unknown_tabular_dataset(dataset_name: str, label_name: str, limit: int = numpy.NaN, train_size: float = 0.5,
+                                val_size: float = 0.2, shuffle: bool = True, l_encoding: bool = False, normal_tag: str = 'normal') -> dict:
+    """
+    Method to process an input dataset as CSV
+    :param normal_tag: string that identifies the class that has to be treated as normal. All other classes will become "anomaly"
+    :param l_encoding: if True, encodes labels as integers (useful for compatibility with some classifiers)
+    :param shuffle: true if data has to be shuffled before splitting
+    :param val_size: percentage of dataset to be used for validation
+    :param train_size: percentage of dataset to be used for training
+    :param limit: integer to cut dataset if needed.
+    :param dataset_name: name of the file (CSV) containing the dataset
+    :param label_name: name of the feature containing the label
+    :return: many values for analysis
+    """
+    # Loading Dataset
+    tab_dict = read_tabular_dataset(dataset_name, label_name, limit, train_size, val_size, shuffle, False)
+    class_names = tab_dict["label_names"]
+    if len(class_names) > 2:
+        arr_dict = {}
+        for c_name in class_names:
+            if c_name != normal_tag:
+                tag = dataset_name + "@" + c_name
+                train_indexes = tab_dict["y_train"] != c_name
+                val_indexes = tab_dict["y_val"] != c_name
+                test_indexes = tab_dict["y_test"] == c_name
+                arr_dict[tag] = {"x_train": tab_dict["x_train"][train_indexes, :],
+                                 "x_test": tab_dict["x_test"][test_indexes, :],
+                                 "x_val": tab_dict["x_val"][val_indexes, :],
+                                 "y_train": numpy.where(tab_dict["y_train"][train_indexes] == normal_tag, 0, 1),
+                                 "y_test": numpy.where(tab_dict["y_test"][test_indexes] == normal_tag, 0, 1),
+                                 "y_val": numpy.where(tab_dict["y_val"][val_indexes] == normal_tag, 0, 1),
+                                 "label_names": [0, 1],
+                                 "feature_names": tab_dict["feature_names"]}
+
+        return arr_dict
+    else:
+        return {}
 
 
 def is_image_dataset(dataset_name) -> bool:

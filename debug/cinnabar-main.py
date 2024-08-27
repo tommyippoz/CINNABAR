@@ -18,6 +18,7 @@ from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import TunedThresholdClassifierCV
+from sklearn.multiclass import OneVsRestClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
@@ -26,7 +27,7 @@ from xgboost import XGBClassifier
 
 from cinnabar.calibration.CalibrationStrategy import PlattScaling, IsotonicScaling, BBQScaling, HistogramScaling
 from cinnabar.prediction_rejection.PredictionRejection import SufficientlySafe, ValueAware, compute_value, \
-    EntropyRejection, EnsembleRejection
+    EntropyRejection, EnsembleRejection, SPROUTStrategy, SPROUTRejection
 from cinnabar.utils.dataset_utils import read_tabular_dataset, read_binary_tabular_dataset
 from cinnabar.utils.general_utils import get_classifier_name, current_ms, compute_rejection_metrics, compute_clf_metrics
 
@@ -34,9 +35,9 @@ CSV_FOLDER = "input_folder"
 # Name of the column that contains the label in the tabular (CSV) dataset
 LABEL_NAME = 'multilabel'
 # Name of the 'normal' class in datasets. This will be used only for binary classification (anomaly detection)
-NORMAL_TAG = 'normal'
+NORMAL_TAG = 0
 # Name of the file in which outputs of the analysis will be saved
-SCORES_FILE = "cinnabar_results.csv"
+SCORES_FILE = "test_value.csv"
 # Percentage of test data wrt train data
 TVT_SPLIT = [0.5, 0.2, 0.3]
 # True if debug information needs to be shown
@@ -44,7 +45,7 @@ VERBOSE = True
 # True if you want to force binary classification
 FORCE_BINARY = True
 # Cost of rejections
-REJECT_COST = -1
+REJECT_COST = 0
 
 # Set random seed for reproducibility
 random.seed(42)
@@ -59,16 +60,16 @@ def get_learners(cont_perc) -> list:
     :return: the list of classifiers to be trained
     """
     base_learners = [
+        DecisionTreeClassifier(),
         XGBClassifier(n_estimators=100),
         LinearDiscriminantAnalysis(),
-        DecisionTreeClassifier(),
         Pipeline([("norm", MinMaxScaler()), ("gnb", GaussianNB())]),
         RandomForestClassifier(n_estimators=100),
         LogisticRegression(),
         ExtraTreesClassifier(n_estimators=100),
-        #ConfidenceBoosting(clf=DecisionTreeClassifier()),
-        #ConfidenceBoosting(clf=RandomForestClassifier(n_estimators=10)),
-        #ConfidenceBoosting(clf=LinearDiscriminantAnalysis()),
+        # ConfidenceBoosting(clf=DecisionTreeClassifier()),
+        # ConfidenceBoosting(clf=RandomForestClassifier(n_estimators=10)),
+        # ConfidenceBoosting(clf=LinearDiscriminantAnalysis()),
     ]
 
     return base_learners
@@ -94,36 +95,50 @@ def get_cost_matrixes() -> list:
     cost_matrixes = []
     if FORCE_BINARY:
         # items are list of 4 items: [TP, FP, FN, TN]
-        cost_matrixes.append([10, -5, -1000, 1])
-        cost_matrixes.append([10, -1, -10000, 1])
+        ##cost_matrixes.append([10, -5, -1000, 1])
+        cost_matrixes.append([100, -1, -10000, 1])
+        cost_matrixes.append([5, -1, -10, 1])
     else:
         # items are list of 2 items: [correct class, misclassification]
         cost_matrixes.append([1, -100])
     return cost_matrixes
 
 
-def get_rejection_strategies(cost_matrix) -> list:
+def get_rejection_strategies(cost_matrix, classifier, data_dict: dict) -> list:
     """
     returns the list of prediction rejection strategies to be used in experiments
     :param cost_matrix: the cost matrix to be used (if value-aware)
     :return: a list of objects
     """
     value_thresholds = numpy.arange(0, 1, 0.01, dtype=float)
-    rej_list = [EntropyRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST),
-                SufficientlySafe(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
-                                 max_iterations=50),
-                ValueAware(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
-                           candidate_thresholds=value_thresholds, normal_tag=NORMAL_TAG)]
+    rej_list = [  # EntropyRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST),
+        SufficientlySafe(cost_matrix=cost_matrix, reject_cost=REJECT_COST, max_iterations=50),
+        #ValueAware(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
+        #           candidate_thresholds=value_thresholds, normal_tag=NORMAL_TAG),]
+        SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
+                        y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
+                        classifier=classifier, label_names=data_dict["label_names"],
+                        strategy=SPROUTStrategy.NEIGHBOUR)]
+    # SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
+    #                 y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
+    #                 classifier=classifier, label_names=data_dict["label_names"],
+    #                 strategy=SPROUTStrategy.FAST),
+    # SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
+    #                 y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
+    #                 classifier=classifier, label_names=data_dict["label_names"], strategy=SPROUTStrategy.BASE),
+    # SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
+    #                 y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
+    #                 classifier=classifier, label_names=data_dict["label_names"], strategy=SPROUTStrategy.FULL)]
     # Ensemble Rejectors
     rejectors = [
-        EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='one'),
-        EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='two'),
-        EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='all'),
+        # EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='one'),
+        # EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='two'),
+        # EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='all'),
     ]
     # Adds base rejectors
     for rej in rej_list:
         rejectors.append(rej)
-    return rejectors
+    return rej_list
 
 
 # ----------------------- MAIN ROUTINE ---------------------
@@ -134,7 +149,7 @@ if __name__ == '__main__':
     exp_hist = None
     if os.path.exists(SCORES_FILE):
         exp_hist = pandas.read_csv(SCORES_FILE, usecols=['dataset_tag', 'calibration',
-                                                              'reject_strategy', 'cost_matrix', 'clf_name'])
+                                                         'reject_strategy', 'cost_matrix', 'clf_name'])
 
     # Iterating over datasets
     for dataset_file in os.listdir(CSV_FOLDER):
@@ -146,7 +161,7 @@ if __name__ == '__main__':
                 data_dict = read_binary_tabular_dataset(dataset_name=os.path.join(CSV_FOLDER, dataset_file),
                                                         label_name=LABEL_NAME,
                                                         train_size=TVT_SPLIT[0], val_size=TVT_SPLIT[1],
-                                                        shuffle=True, l_encoding=True, normal_tag=NORMAL_TAG)
+                                                        shuffle=True, l_encoding=True, normal_tag="normal")
             else:
                 data_dict = read_tabular_dataset(dataset_name=os.path.join(CSV_FOLDER, dataset_file),
                                                  label_name=LABEL_NAME,
@@ -205,7 +220,7 @@ if __name__ == '__main__':
                         print("\tTuned: accuracy %.4f, value %.3f" % (tuned_clf_metrics['acc'], tuned_clf_value))
 
                         # Loop over rejection strategies
-                        rej_strategy_list = get_rejection_strategies(cost_matrix)
+                        rej_strategy_list = get_rejection_strategies(cost_matrix, tuned_classifier, data_dict)
                         for rej_strategy in rej_strategy_list:
                             reject_name = rej_strategy.get_name()
                             reject_desc = rej_strategy.describe()
@@ -223,11 +238,12 @@ if __name__ == '__main__':
                             else:
                                 # Otherwise we can move ahead
                                 start_ms = current_ms()
-                                rej_strategy.fit(proba=tuned_val_proba, y_pred=tuned_val_pred, y_true=data_dict["y_val"],
+                                rej_strategy.fit(proba=tuned_val_proba, y_pred=tuned_val_pred,
+                                                 y_true=data_dict["y_val"],
                                                  verbose=False)
-                                rej_pred_y = rej_strategy.apply(test_proba=tuned_test_proba,
+                                rej_pred_y = rej_strategy.apply(test_proba=tuned_test_proba, x_test=data_dict["x_test"],
                                                                 test_label=test_pred)
-                                rej_time = current_ms() - start_time
+                                rej_time = current_ms() - start_ms
                                 value = compute_value(data_dict["y_test"], rej_pred_y,
                                                       cost_matrix, REJECT_COST, None, NORMAL_TAG)
                                 rej_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
@@ -265,7 +281,8 @@ if __name__ == '__main__':
                                 with open(SCORES_FILE, "a") as myfile:
                                     # Prints result of experiment in CSV file
                                     myfile.write("%s,%s,%s,%s,%s,%s,%s," % (
-                                    dataset_name, clf_name, cs_name, cost_mat_name, tune_desc, reject_name, reject_desc))
+                                        dataset_name, clf_name, cs_name, cost_mat_name, tune_desc, reject_name,
+                                        reject_desc))
                                     # Prints clf stats
                                     myfile.write(str(clf_value) + ",")
                                     for met in clf_metrics:
