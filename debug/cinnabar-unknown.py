@@ -10,7 +10,6 @@ import time
 # ------- GLOBAL VARS -----------
 import numpy as numpy
 import pandas
-from confens.classifiers.ConfidenceBoosting import ConfidenceBoosting
 from logitboost import LogitBoost
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
