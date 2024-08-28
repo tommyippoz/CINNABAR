@@ -214,10 +214,12 @@ def read_unknown_tabular_dataset(dataset_name: str, label_name: str, limit: int 
                 val_indexes = tab_dict["y_val"] != c_name
                 test_indexes = tab_dict["y_test"] == c_name
                 arr_dict[tag] = {"x_train": tab_dict["x_train"][train_indexes, :],
-                                 "x_test": tab_dict["x_test"][test_indexes, :],
+                                 "x_test_unk": tab_dict["x_test"][test_indexes, :],
+                                 "x_test": tab_dict["x_test"],
                                  "x_val": tab_dict["x_val"][val_indexes, :],
                                  "y_train": numpy.where(tab_dict["y_train"][train_indexes] == normal_tag, 0, 1),
-                                 "y_test": numpy.where(tab_dict["y_test"][test_indexes] == normal_tag, 0, 1),
+                                 "y_test_unk": numpy.where(tab_dict["y_test"][test_indexes] == normal_tag, 0, 1),
+                                 "y_test": numpy.where(tab_dict["y_test"] == normal_tag, 0, 1),
                                  "y_val": numpy.where(tab_dict["y_val"][val_indexes] == normal_tag, 0, 1),
                                  "label_names": [0, 1],
                                  "feature_names": tab_dict["feature_names"]}

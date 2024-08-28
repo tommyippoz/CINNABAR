@@ -37,7 +37,7 @@ LABEL_NAME = 'multilabel'
 # Name of the 'normal' class in datasets. This will be used only for binary classification (anomaly detection)
 NORMAL_TAG = 0
 # Name of the file in which outputs of the analysis will be saved
-SCORES_FILE = "debug_unknowns.csv"
+SCORES_FILE = "test_unk.csv"
 # Percentage of test data wrt train data
 TVT_SPLIT = [0.5, 0.2, 0.3]
 # True if debug information needs to be shown
@@ -58,13 +58,13 @@ def get_learners() -> list:
     :return: the list of classifiers to be trained
     """
     base_learners = [
-        #DecisionTreeClassifier(),
-        #XGBClassifier(n_estimators=100),
+        # DecisionTreeClassifier(),
+        XGBClassifier(n_estimators=100),
         LinearDiscriminantAnalysis(),
-        #Pipeline([("norm", MinMaxScaler()), ("gnb", GaussianNB())]),
-        #RandomForestClassifier(n_estimators=100),
-        #LogisticRegression(),
-        #ExtraTreesClassifier(n_estimators=100),
+        # Pipeline([("norm", MinMaxScaler()), ("gnb", GaussianNB())]),
+        # RandomForestClassifier(n_estimators=100),
+        # LogisticRegression(),
+        ExtraTreesClassifier(n_estimators=100),
         # ConfidenceBoosting(clf=DecisionTreeClassifier()),
         # ConfidenceBoosting(clf=RandomForestClassifier(n_estimators=10)),
         # ConfidenceBoosting(clf=LinearDiscriminantAnalysis()),
@@ -83,7 +83,7 @@ def get_calibrators(classifier, labels) -> list:
             HistogramScaling(classifier, n_bins=10, threshold=0.5, labels=labels),
             BBQScaling(classifier, threshold=0.5, labels=labels),
             None
-    ]
+            ]
 
 
 def get_cost_matrixes() -> list:
@@ -106,21 +106,21 @@ def get_rejection_strategies(cost_matrix, classifier, data_dict: dict) -> list:
     """
     value_thresholds = numpy.arange(0, 1, 0.01, dtype=float)
     rej_list = [EntropyRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST),
-                SufficientlySafe(cost_matrix=cost_matrix, reject_cost=REJECT_COST, max_iterations=50),
-                ValueAware(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
-                           candidate_thresholds=value_thresholds, normal_tag=NORMAL_TAG),
-                SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
-                                y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
-                                classifier=classifier, label_names=data_dict["label_names"],
-                                strategy=SPROUTStrategy.NEIGHBOUR),
-                SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
-                                y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
-                                classifier=classifier, label_names=data_dict["label_names"],
-                                strategy=SPROUTStrategy.FAST),
-                SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
-                                y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
-                                classifier=classifier, label_names=data_dict["label_names"],
-                                strategy=SPROUTStrategy.BASE),
+                # SufficientlySafe(cost_matrix=cost_matrix, reject_cost=REJECT_COST, max_iterations=50),
+                # ValueAware(cost_matrix=cost_matrix, reject_cost=REJECT_COST,
+                #            candidate_thresholds=value_thresholds, normal_tag=NORMAL_TAG),
+                # SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
+                #                 y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
+                #                 classifier=classifier, label_names=data_dict["label_names"],
+                #                 strategy=SPROUTStrategy.NEIGHBOUR),
+                # SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
+                #                 y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
+                #                 classifier=classifier, label_names=data_dict["label_names"],
+                #                 strategy=SPROUTStrategy.FAST),
+                # SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
+                #                 y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
+                #                 classifier=classifier, label_names=data_dict["label_names"],
+                #                 strategy=SPROUTStrategy.BASE),
                 # SPROUTRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, x_train=data_dict["x_train"],
                 #                 y_train=data_dict["y_train"], x_val=data_dict["x_val"], y_val=data_dict["y_val"],
                 #                 classifier=classifier, label_names=data_dict["label_names"],
@@ -133,7 +133,7 @@ def get_rejection_strategies(cost_matrix, classifier, data_dict: dict) -> list:
         # EnsembleRejection(cost_matrix=cost_matrix, reject_cost=REJECT_COST, rejectors=rej_list, strategy='all'),
     ]
     # Adds base rejectors
-    #for rej in rej_list:
+    # for rej in rej_list:
     #    rejectors.append(rej)
     return rej_list
 
@@ -234,13 +234,15 @@ if __name__ == '__main__':
                                     rej_strategy.fit(proba=tuned_val_proba, y_pred=tuned_val_pred,
                                                      y_true=data_dict["y_val"],
                                                      verbose=False)
+
+                                    # Test set
                                     start_ms = current_ms()
                                     rej_pred_y = rej_strategy.apply(test_proba=tuned_test_proba,
                                                                     x_test=data_dict["x_test"],
                                                                     test_label=test_pred)
                                     rej_time = current_ms() - start_ms
-                                    value = compute_value(data_dict["y_test"], rej_pred_y,
-                                                          cost_matrix, REJECT_COST, None, NORMAL_TAG)
+                                    test_value = compute_value(data_dict["y_test"], rej_pred_y,
+                                                               cost_matrix, REJECT_COST, None, NORMAL_TAG)
                                     rej_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
                                                                           y_clf=rej_pred_y,
                                                                           labels=data_dict["label_names"])
@@ -249,9 +251,20 @@ if __name__ == '__main__':
                                                                             y_wrapper=rej_pred_y,
                                                                             y_clf=test_pred)
 
+                                    # Unknown test set
+                                    tuned_unk_proba = tuned_classifier.predict_proba(data_dict["x_test_unk"])
+                                    unk_pred_y = rej_strategy.apply(test_proba=tuned_unk_proba,
+                                                                    x_test=data_dict["x_test_unk"],
+                                                                    test_label=test_pred)
+                                    unk_value = compute_value(data_dict["y_test_unk"], unk_pred_y,
+                                                              cost_matrix, REJECT_COST, None, NORMAL_TAG)
+                                    unk_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test_unk"],
+                                                                          y_clf=unk_pred_y,
+                                                                          labels=data_dict["label_names"])
+
                                     print(
                                         "\twith '%s': \tvalue %.3f, accuracy %.4f, misc %.4f, rejections %.4f, corr. rej. %.3f, misc gain %.3f" %
-                                        (reject_name, value, rej_metrics['alpha_w'], rej_metrics['eps_w'],
+                                        (reject_name, test_value, rej_metrics['alpha_w'], rej_metrics['eps_w'],
                                          rej_metrics['phi'], rej_metrics['phi_m_ratio'], rej_metrics['eps_gain']))
 
                                     # Updates CSV file with metrics of experiment
@@ -273,6 +286,10 @@ if __name__ == '__main__':
                                             # Prints rej_clf stats
                                             for met in rej_metrics:
                                                 myfile.write(str(met) + ",")
+                                            # Prints rej_clf stats
+                                            myfile.write("unk_clf_value,")
+                                            for met in unk_clf_metrics:
+                                                myfile.write(str(met) + ",")
                                             myfile.write("\n")
                                     with open(SCORES_FILE, "a") as myfile:
                                         # Prints result of experiment in CSV file
@@ -288,12 +305,16 @@ if __name__ == '__main__':
                                         for met in tuned_clf_metrics:
                                             myfile.write(str(tuned_clf_metrics[met]) + ",")
                                         # Prints rej_clf stats
-                                        myfile.write(str(value) + ",")
+                                        myfile.write(str(test_value) + ",")
                                         for met in rej_clf_metrics:
                                             myfile.write(str(rej_clf_metrics[met]) + ",")
                                         # Prints rej_clf stats
                                         for met in rej_metrics:
                                             myfile.write(str(rej_metrics[met]) + ",")
+                                        # Prints unk_clf stats
+                                        myfile.write(str(unk_value) + ",")
+                                        for met in unk_clf_metrics:
+                                            myfile.write(str(unk_clf_metrics[met]) + ",")
                                         myfile.write("\n")
 
                                 exp_i += 1
