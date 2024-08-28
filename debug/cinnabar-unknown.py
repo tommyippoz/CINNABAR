@@ -183,6 +183,8 @@ if __name__ == '__main__':
                         val_pred = classifier.predict(data_dict["x_val"])
                         test_proba = classifier.predict_proba(data_dict["x_test"])
                         test_pred = classifier.predict(data_dict["x_test"])
+                        unk_proba = classifier.predict_proba(data_dict["x_test_unk"])
+                        unk_pred = classifier.predict(data_dict["x_test_unk"])
                         clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
                                                           y_clf=test_pred,
                                                           labels=data_dict["label_names"])
@@ -235,15 +237,17 @@ if __name__ == '__main__':
                                                                             y_clf=test_pred)
 
                                     # Unknown test set
-                                    tuned_unk_proba = classifier.predict_proba(data_dict["x_test_unk"])
-                                    unk_pred_y = rej_strategy.apply(test_proba=tuned_unk_proba,
+                                    unk_pred_y = rej_strategy.apply(test_proba=unk_proba,
                                                                     x_test=data_dict["x_test_unk"],
-                                                                    test_label=test_pred)
+                                                                    test_label=unk_pred)
                                     unk_value = compute_value(data_dict["y_test_unk"], unk_pred_y,
                                                               cost_matrix, REJECT_COST, None, NORMAL_TAG)
                                     unk_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test_unk"],
                                                                           y_clf=unk_pred_y,
                                                                           labels=data_dict["label_names"])
+                                    unk_rej_metrics = compute_rejection_metrics(y_true=data_dict["y_test_unk"],
+                                                                            y_wrapper=unk_pred_y,
+                                                                            y_clf=unk_pred)
 
                                     print(
                                         "\twith '%s': \tvalue %.3f, accuracy %.4f, misc %.4f, rejections %.4f, corr. rej. %.3f, misc gain %.3f" %
@@ -269,6 +273,9 @@ if __name__ == '__main__':
                                             myfile.write("unk_clf_value,")
                                             for met in unk_clf_metrics:
                                                 myfile.write(str(met) + ",")
+                                            # Prints rej_clf stats
+                                            for met in unk_rej_metrics:
+                                                myfile.write(str(met) + ",")
                                             myfile.write("\n")
                                     with open(SCORES_FILE, "a") as myfile:
                                         # Prints result of experiment in CSV file
@@ -290,6 +297,9 @@ if __name__ == '__main__':
                                         myfile.write(str(unk_value) + ",")
                                         for met in unk_clf_metrics:
                                             myfile.write(str(unk_clf_metrics[met]) + ",")
+                                        # Prints rej_clf stats
+                                        for met in unk_rej_metrics:
+                                            myfile.write(str(unk_rej_metrics[met]) + ",")
                                         myfile.write("\n")
 
                                 exp_i += 1
