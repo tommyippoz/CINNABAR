@@ -17,7 +17,6 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import make_scorer
-from sklearn.model_selection import TunedThresholdClassifierCV
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.pipeline import Pipeline
@@ -179,6 +178,11 @@ if __name__ == '__main__':
                             cs_name = calibrated_classifier.get_name()
                             classifier = copy.deepcopy(calibrated_classifier)
                             classifier.fit(data_dict["x_train"], data_dict["y_train"])
+
+                        # Using Classifier
+                        val_proba = classifier.predict_proba(data_dict["x_val"])
+                        val_pred = classifier.predict(data_dict["x_val"])
+                        test_proba = classifier.predict_proba(data_dict["x_test"])
                         test_pred = classifier.predict(data_dict["x_test"])
                         clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
                                                           y_clf=test_pred,
@@ -193,28 +197,8 @@ if __name__ == '__main__':
                             print("'%s - %s': accuracy %.4f, value %.3f" %
                                   (clf_name, cs_name, clf_metrics['acc'], clf_value))
 
-                            # Creating Tuned Classifier
-                            tuned_classifier = TunedThresholdClassifierCV(
-                                estimator=classifier,
-                                scoring=make_scorer(compute_value, cost_matrix=cost_matrix, reject_value=REJECT_COST,
-                                                    reject_tag=None, normal_tag=NORMAL_TAG),
-                                store_cv_results=True,
-                            )
-                            tuned_classifier.fit(data_dict["x_train"], data_dict["y_train"])
-                            tune_desc = tuned_classifier.best_threshold_
-                            tuned_val_proba = tuned_classifier.predict_proba(data_dict["x_val"])
-                            tuned_val_pred = tuned_classifier.predict(data_dict["x_val"])
-                            tuned_test_proba = tuned_classifier.predict_proba(data_dict["x_test"])
-                            tuned_test_pred = tuned_classifier.predict(data_dict["x_test"])
-                            tuned_clf_metrics = compute_clf_metrics(y_true=data_dict["y_test"],
-                                                                    y_clf=tuned_test_pred,
-                                                                    labels=data_dict["label_names"])
-                            tuned_clf_value = compute_value(data_dict["y_test"], tuned_test_pred,
-                                                            cost_matrix, REJECT_COST, None, NORMAL_TAG)
-                            print("\tTuned: accuracy %.4f, value %.3f" % (tuned_clf_metrics['acc'], tuned_clf_value))
-
                             # Loop over rejection strategies
-                            rej_strategy_list = get_rejection_strategies(cost_matrix, tuned_classifier, data_dict)
+                            rej_strategy_list = get_rejection_strategies(cost_matrix, classifier, data_dict)
                             for rej_strategy in rej_strategy_list:
                                 reject_name = rej_strategy.get_name()
                                 reject_desc = rej_strategy.describe()
@@ -231,13 +215,13 @@ if __name__ == '__main__':
 
                                 else:
                                     # Otherwise we can move ahead
-                                    rej_strategy.fit(proba=tuned_val_proba, y_pred=tuned_val_pred,
+                                    rej_strategy.fit(proba=val_proba, y_pred=val_pred,
                                                      y_true=data_dict["y_val"],
                                                      verbose=False)
 
                                     # Test set
                                     start_ms = current_ms()
-                                    rej_pred_y = rej_strategy.apply(test_proba=tuned_test_proba,
+                                    rej_pred_y = rej_strategy.apply(test_proba=test_proba,
                                                                     x_test=data_dict["x_test"],
                                                                     test_label=test_pred)
                                     rej_time = current_ms() - start_ms
@@ -252,7 +236,7 @@ if __name__ == '__main__':
                                                                             y_clf=test_pred)
 
                                     # Unknown test set
-                                    tuned_unk_proba = tuned_classifier.predict_proba(data_dict["x_test_unk"])
+                                    tuned_unk_proba = classifier.predict_proba(data_dict["x_test_unk"])
                                     unk_pred_y = rej_strategy.apply(test_proba=tuned_unk_proba,
                                                                     x_test=data_dict["x_test_unk"],
                                                                     test_label=test_pred)
@@ -275,10 +259,6 @@ if __name__ == '__main__':
                                                 "dataset_tag,clf_name,calibration,cost_matrix,tune_desc,reject_strategy,rej_desc,tuned_clf_value,")
                                             for met in clf_metrics:
                                                 myfile.write(str(met) + ",")
-                                            # Prints tuned clf stats
-                                            myfile.write("cost_clf_value,")
-                                            for met in tuned_clf_metrics:
-                                                myfile.write(str(met) + ",")
                                             # Prints rej_clf stats
                                             myfile.write("rej_clf_value,")
                                             for met in rej_clf_metrics:
@@ -294,16 +274,12 @@ if __name__ == '__main__':
                                     with open(SCORES_FILE, "a") as myfile:
                                         # Prints result of experiment in CSV file
                                         myfile.write("%s,%s,%s,%s,%s,%s,%s," % (
-                                            dataset_name, clf_name, cs_name, cost_mat_name, tune_desc, reject_name,
+                                            dataset_name, clf_name, cs_name, cost_mat_name, "", reject_name,
                                             reject_desc))
                                         # Prints clf stats
                                         myfile.write(str(clf_value) + ",")
                                         for met in clf_metrics:
                                             myfile.write(str(clf_metrics[met]) + ",")
-                                        # Prints tuned_clf stats
-                                        myfile.write(str(tuned_clf_value) + ",")
-                                        for met in tuned_clf_metrics:
-                                            myfile.write(str(tuned_clf_metrics[met]) + ",")
                                         # Prints rej_clf stats
                                         myfile.write(str(test_value) + ",")
                                         for met in rej_clf_metrics:
