@@ -431,7 +431,7 @@ class EnsembleRejection(PredictionRejection):
         """
         rejs = []
         for rejector in self.rejectors:
-            rejs.append(rejector.find_rejects(test_proba, None, None))
+            rejs.append(rejector.find_rejects(test_proba, x_test, None))
         rejs = numpy.sum(numpy.vstack(rejs), axis=0)
         if self.strategy == 'one':
             return numpy.where(rejs > 0, 1, 0)
@@ -447,7 +447,7 @@ class EnsembleRejection(PredictionRejection):
         Returns the name of the strategy
         :return:
         """
-        return self.__class__.__name__ + "(" + str(self.strategy) + ")"
+        return self.__class__.__name__ + "(" + str(self.strategy) + "-" + "#".join([str(x.get_name()) for x in self.rejectors]) + ")"
 
 
 class SPROUTStrategy(Enum):
@@ -525,7 +525,7 @@ class SPROUTRejection(PredictionRejection):
         :return: boolean
         """
         try:
-            if self.classifier is None:
+            if self.classifier is None or self.sprout is None or self.sprout.binary_adjudicator is None:
                 return False
             check_is_fitted(self.classifier)
             return True
