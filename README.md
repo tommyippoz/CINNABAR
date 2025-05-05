@@ -38,4 +38,7 @@ The scripts uses data from a study of the same authors (monitoring an IoT device
 Developed @ University of Trento (Povo), Italy, and University of Florence, Florence, Italy
 
 Contributors
-- Tommaso Zoppi
+- Tommaso Zoppi (University of Florence)
+- Burcu Sayin (University of Trento)
+- Nicolò Marchini (University of Trento)
+- Fahad Ahmed Khokhar (University of Florence)
